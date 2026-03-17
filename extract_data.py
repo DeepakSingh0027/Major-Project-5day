@@ -70,7 +70,7 @@ for file in files:
                 value = resource["valueQuantity"].get("value")
                 unit = resource["valueQuantity"].get("unit")
 
-                observations.append({
+                observations.append({   
                     "patient_id": patient_id,
                     "value": value,
                     "unit": unit

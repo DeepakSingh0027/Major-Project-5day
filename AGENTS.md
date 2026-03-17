@@ -108,9 +108,11 @@ conditions.csv
 labs.csv
 medications.csv
 
-Task 8 — Create Structured Database
+Task 8 — Create Structured Database [DONE]
 
 Goal: Create database or dataframe store.
+
+Status: **Complete.** Created `build_database.py` which loads the four CSV datasets into a local SQLite database (`datasets/fhir_knowledge_base.db`). The script defines an explicit schema with primary and foreign keys and sets up indexes for fast queries.
 
 Options:
 SQLite,PostgreSQL,CSV dataset
@@ -119,7 +121,7 @@ Example schema:
 patients
 conditions
 medications
-observations
+labs
 
 This becomes the knowledge base.
 
@@ -127,9 +129,10 @@ This becomes the knowledge base.
 
 ```
 Major-Project-5day/
+├── build_database.py    # Generates SQLite DB from CSV files
 ├── extract_data.py      # Main ETL script — reads FHIR bundles, writes CSVs
 ├── inspect_bundle.py    # Utility — prints resource types in a single bundle
-├── datasets/            # Output CSV files (patients, conditions, observations, medications)
+├── datasets/            # Output CSV files and SQLite database
 ├── readme.md            # Project README (currently empty)
 └── AGENTS.md            # This file
 ```
@@ -142,6 +145,7 @@ simulator) before running the scripts.
 
 - **Python 3** (3.8+ recommended)
 - **pandas** — the only third-party dependency
+- **sqlite3** — built-in Python module
 
 There is no `requirements.txt` or `pyproject.toml` yet. Install manually:
 
@@ -158,6 +162,9 @@ pip install pandas
 ```bash
 # Main data extraction (requires synthea/output/fhir/ to exist)
 python extract_data.py
+
+# Build SQLite database (requires extract_data.py to run first)
+python build_database.py
 
 # Inspect a single FHIR bundle
 python inspect_bundle.py

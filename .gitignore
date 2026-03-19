@@ -1,0 +1,17 @@
+# Virtual environments
+.venv/
+venv/
+
+# Python cache / compiled files
+__pycache__/
+*.py[cod]
+
+# Local synthetic FHIR input data
+synthea/
+
+# Generated datasets and database artifacts
+datasets/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

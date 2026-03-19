@@ -125,14 +125,133 @@ labs
 
 This becomes the knowledge base.
 
+## Task 9 - Clinical NLP Pipeline [DONE]
+
+Goal: Extract medical entities from clinical notes.
+
+Status: **Complete.** Created `extract_clinical_entities.py` to scan FHIR
+bundle note text with `medspaCy`, apply ConText assertions, and write a
+structured entity-level CSV. `build_database.py` was also extended so the
+NLP output can be loaded into SQLite when available.
+
+### What was done
+
+1. **Added a clinical NLP script** - `extract_clinical_entities.py` reads
+   bundle JSON files from `synthea/output/fhir/`, collects free-text
+   `note[].text` content and narrative `text.div` sections, and normalizes
+   them into note records for processing.
+2. **Integrated medspaCy + ConText** - each note is passed through
+   `medspacy.load()`, and extracted entities are enriched with contextual
+   flags such as `is_negated`, `is_uncertain`, `is_historical`, and
+   `is_family`.
+3. **Created note and entity datasets** - the pipeline writes
+   `datasets/clinical_notes.csv` for note-level text records and
+   `datasets/clinical_entities.csv` for entity-level extractions with
+   patient/resource linkage plus assertion and offset metadata.
+4. **Extended the knowledge base schema** - `build_database.py` now creates
+   `clinical_notes` and `clinical_entities` tables and loads the CSVs if
+   they exist, while keeping the original four-table flow intact when the
+   NLP step has not been run.
+5. **Added graceful fallbacks** - missing FHIR directories, malformed JSON,
+   absent note text, and missing `medspacy` installations are all handled
+   cleanly with user-facing messages.
+
+### Output schema
+
+`clinical_notes.csv` contains:
+
+- `note_id`
+- `patient_id`
+- `bundle_file`
+- `resource_type`
+- `resource_id`
+- `note_source`
+- `note_text`
+
+`clinical_entities.csv` contains:
+
+- `entity_id`
+- `patient_id`
+- `bundle_file`
+- `resource_type`
+- `resource_id`
+- `note_id`
+- `note_source`
+- `note_text`
+- `entity_text`
+- `entity_label`
+- `assertion`
+- `is_negated`
+- `is_uncertain`
+- `is_historical`
+- `is_family`
+- `start_char`
+- `end_char`
+
+## Task 10 - Vector Search Knowledge Base [DONE]
+
+Goal: Build a semantic retrieval system over clinical notes.
+
+Status: **Complete.** Created `vector_search.py` to generate embeddings from
+clinical note text with `sentence-transformers`, store them in a FAISS index,
+and run semantic search queries such as `"patients with chest pain but no
+hypertension"`.
+
+### What was done
+
+1. **Prepared note-level search input** - Task 9 now persists
+   `datasets/clinical_notes.csv`, which gives the vector pipeline a clean
+   note corpus to embed.
+2. **Added embedding generation** - `vector_search.py` loads
+   `clinical_notes.csv`, encodes `note_text` with the
+   `all-MiniLM-L6-v2` sentence-transformer by default, and saves the
+   embedding matrix to `datasets/clinical_note_embeddings.npy`.
+3. **Stored vectors in FAISS** - the script builds a
+   `faiss.IndexFlatL2` index and saves it to
+   `datasets/clinical_note_index.faiss` for fast semantic retrieval.
+4. **Saved retrieval metadata** - note metadata is written to
+   `datasets/note_vector_metadata.csv` and index settings are stored in
+   `datasets/vector_index_config.json`.
+5. **Built semantic search** - the same script supports
+   `--query "patients with chest pain but no hypertension"` and returns the
+   closest note matches with patient and resource metadata.
+6. **Aligned relational and vector layers** - `build_database.py` now loads
+   `clinical_notes.csv` into SQLite so note IDs stay consistent across the
+   relational knowledge base and the FAISS vector store.
+
+### Vector artifacts
+
+Task 10 writes:
+
+- `datasets/clinical_note_embeddings.npy`
+- `datasets/clinical_note_index.faiss`
+- `datasets/note_vector_metadata.csv`
+- `datasets/vector_index_config.json`
+
+## Final Workflow
+
+Member 1
+Synthetic Data Generation
+        ↓
+Member 2
+FHIR → Structured Dataset
+        ↓
+Member 3
+Clinical NLP + Vector Search
+
+Because each stage can simulate or mock its inputs, members can still work in
+parallel even though the final deliverable connects all three stages.
+
 ### Repository Structure
 
 ```
 Major-Project-5day/
 ├── build_database.py    # Generates SQLite DB from CSV files
+├── extract_clinical_entities.py  # Clinical NLP pipeline for FHIR note text
 ├── extract_data.py      # Main ETL script — reads FHIR bundles, writes CSVs
 ├── inspect_bundle.py    # Utility — prints resource types in a single bundle
-├── datasets/            # Output CSV files and SQLite database
+├── vector_search.py     # Builds FAISS index and runs semantic note search
+├── datasets/            # Output CSV files, vector artifacts, and SQLite database
 ├── readme.md            # Project README (currently empty)
 └── AGENTS.md            # This file
 ```
@@ -144,13 +263,16 @@ simulator) before running the scripts.
 ### Dependencies
 
 - **Python 3** (3.8+ recommended)
-- **pandas** — the only third-party dependency
+- **pandas** — required for ETL and CSV/database loading
+- **medspacy** — required for Task 9 clinical note entity extraction
+- **sentence-transformers** — required for Task 10 note embeddings
+- **faiss-cpu** — required for Task 10 vector storage and semantic search
 - **sqlite3** — built-in Python module
 
 There is no `requirements.txt` or `pyproject.toml` yet. Install manually:
 
 ```bash
-pip install pandas
+pip install pandas medspacy sentence-transformers faiss-cpu
 ```
 
 ---
@@ -165,6 +287,15 @@ python extract_data.py
 
 # Build SQLite database (requires extract_data.py to run first)
 python build_database.py
+
+# Extract clinical entities from FHIR notes (requires medspacy)
+python extract_clinical_entities.py
+
+# Build the vector index over notes
+python vector_search.py
+
+# Run semantic search over indexed notes
+python vector_search.py --query "patients with chest pain but no hypertension" --top-k 5
 
 # Inspect a single FHIR bundle
 python inspect_bundle.py

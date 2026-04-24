@@ -15,6 +15,7 @@ import pandas as pd
 import hybrid_retriever
 import llm_client
 import prompt_templates
+import verifier
 
 
 # -----------------
@@ -60,6 +61,10 @@ class RAGController:
         else:
             print("  Ollama status: NOT CONNECTED (generation will fail)")
             print("  Start with: ollama serve")
+
+        print("  Initializing safety verifiers...")
+        self.numeric_verifier = verifier.NumericVerifier()
+        self.semantic_verifier = verifier.SemanticVerifier()
 
         print("RAG Controller ready.\n")
 
@@ -150,6 +155,7 @@ class RAGController:
             "clinician_response": None,
             "patient_response": None,
             "retrieval_duration_ms": round(retrieval_ms),
+            "verification_flags": {},
         }
 
         if mode in ("clinician", "both"):
@@ -190,8 +196,37 @@ class RAGController:
             else:
                 print(f"  Patient response: {patient_result['duration_ms']}ms")
 
+        # 4. Verify outputs and Log Provenance
         total_ms = (time.perf_counter() - overall_start) * 1000
         result["total_duration_ms"] = round(total_ms)
+
+        print("Running verification checks...")
+        for res_mode, res_key in [("clinician", "clinician_response"), ("patient", "patient_response")]:
+            res_obj = result.get(res_key)
+            if res_obj and not res_obj.get("error"):
+                gen_text = res_obj.get("response", "")
+                
+                # Check numeric and semantic consistency
+                unsup_nums = self.numeric_verifier.verify(gen_text, chunks)
+                unsup_claims = self.semantic_verifier.verify(gen_text, chunks)
+                
+                result["verification_flags"][res_key] = {
+                    "unsupported_numbers": unsup_nums,
+                    "unsupported_claims": unsup_claims,
+                }
+                
+                # Log to audit trail
+                verifier.log_provenance(
+                    query=query_text,
+                    mode=res_mode,
+                    chunks=chunks,
+                    generated_text=gen_text,
+                    unsupported_numbers=unsup_nums,
+                    unsupported_claims=unsup_claims,
+                    retrieval_ms=round(retrieval_ms),
+                    generation_ms=res_obj.get("duration_ms", 0)
+                )
+
         print(f"\nTotal pipeline time: {total_ms:.0f}ms")
 
         return result
@@ -226,6 +261,15 @@ def print_rag_result(result: dict) -> None:
         else:
             print(f"(generated in {cr['duration_ms']}ms)\n")
             print(cr["response"])
+            
+            # Show flags
+            flags = result.get("verification_flags", {}).get("clinician_response", {})
+            if flags.get("unsupported_numbers"):
+                print(f"\n[WARNING] Unsupported Numbers: {flags['unsupported_numbers']}")
+            if flags.get("unsupported_claims"):
+                print("\n[WARNING] Unsupported Claims (Hallucinations?):")
+                for claim in flags["unsupported_claims"]:
+                    print(f"  - {claim}")
 
     # Show patient response
     if result.get("patient_response"):
@@ -236,6 +280,15 @@ def print_rag_result(result: dict) -> None:
         else:
             print(f"(generated in {pr['duration_ms']}ms)\n")
             print(pr["response"])
+            
+            # Show flags
+            flags = result.get("verification_flags", {}).get("patient_response", {})
+            if flags.get("unsupported_numbers"):
+                print(f"\n[WARNING] Unsupported Numbers: {flags['unsupported_numbers']}")
+            if flags.get("unsupported_claims"):
+                print("\n[WARNING] Unsupported Claims (Hallucinations?):")
+                for claim in flags["unsupported_claims"]:
+                    print(f"  - {claim}")
 
     print("\n" + "=" * 70)
 

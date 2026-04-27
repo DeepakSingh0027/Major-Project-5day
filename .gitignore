@@ -15,3 +15,9 @@ datasets/
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+
+# Local LLM weights and configurations
+.ollama/
+.ollama-home/
+.cache/

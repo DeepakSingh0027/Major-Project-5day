@@ -1,0 +1,72 @@
+[
+  {
+    "name": "supported_chest_pain",
+    "generated_text": "Patient reports chest pain radiating to the left arm.",
+    "retrieved_note_numbers": [1],
+    "patient_id": "p001",
+    "expected_supported": true,
+    "expected_reason": ""
+  },
+  {
+    "name": "supported_hba1c_context",
+    "generated_text": "HbA1c is above target.",
+    "retrieved_note_numbers": [2],
+    "patient_id": "p001",
+    "expected_supported": true,
+    "expected_reason": ""
+  },
+  {
+    "name": "anchor_mismatch",
+    "generated_text": "Patient has kidney failure.",
+    "retrieved_note_numbers": [1],
+    "patient_id": "p001",
+    "expected_supported": false,
+    "expected_reason": "anchor_mismatch"
+  },
+  {
+    "name": "assertion_mismatch_negation",
+    "generated_text": "Patient has chest pain.",
+    "retrieved_note_numbers": [3],
+    "patient_id": "p002",
+    "expected_supported": false,
+    "expected_reason": "assertion_mismatch"
+  },
+  {
+    "name": "historical_current_mismatch",
+    "generated_text": "Fever is still present.",
+    "retrieved_note_numbers": [4],
+    "patient_id": "p002",
+    "expected_supported": false,
+    "expected_reason": "assertion_mismatch"
+  },
+  {
+    "name": "patient_context_support",
+    "generated_text": "The patient is 67 years old.",
+    "retrieved_note_numbers": [1],
+    "patient_id": "p001",
+    "expected_supported": true,
+    "expected_reason": ""
+  },
+  {
+    "name": "numeric_only_mismatch_suppressed",
+    "generated_text": "LDL cholesterol was 150 mg/dL.",
+    "retrieved_note_numbers": [2],
+    "patient_id": "p001",
+    "expected_supported": true,
+    "expected_reason": "",
+    "numeric_findings": [
+      {
+        "claim_sentence": "LDL cholesterol was 150 mg/dL.",
+        "claim_text": "150 mg/dL"
+      }
+    ]
+  },
+  {
+    "name": "unsupported_follow_up_action",
+    "generated_text": "The patient is scheduled for dialysis next week.",
+    "retrieved_note_numbers": [2],
+    "patient_id": "p001",
+    "expected_supported": false,
+    "expected_reason": "anchor_mismatch"
+  }
+]

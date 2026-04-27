@@ -1,0 +1,177 @@
+[
+  {
+    "name": "hba1c_supported",
+    "generated_text": "HbA1c is 8.2%.",
+    "retrieved_note_numbers": [2],
+    "patient_id": "p001",
+    "expected_supported": true
+  },
+  {
+    "name": "blood_pressure_supported",
+    "generated_text": "Blood pressure was 158/92 mmHg.",
+    "retrieved_note_numbers": [1],
+    "patient_id": "p001",
+    "expected_supported": true
+  },
+  {
+    "name": "age_supported",
+    "generated_text": "The patient is 67 years old.",
+    "retrieved_note_numbers": [1],
+    "patient_id": "p001",
+    "expected_supported": true
+  },
+  {
+    "name": "ldl_supported",
+    "generated_text": "LDL cholesterol was 142 mg/dL.",
+    "retrieved_note_numbers": [2],
+    "patient_id": "p001",
+    "expected_supported": true
+  },
+  {
+    "name": "ldl_unsupported",
+    "generated_text": "LDL cholesterol was 150 mg/dL.",
+    "retrieved_note_numbers": [2],
+    "patient_id": "p001",
+    "expected_supported": false
+  },
+  {
+    "name": "troponin_unsupported",
+    "generated_text": "Troponin I was 0.10 ng/mL.",
+    "retrieved_note_numbers": [1],
+    "patient_id": "p001",
+    "expected_supported": false
+  },
+  {
+    "name": "glucose_supported",
+    "generated_text": "Fasting glucose was 186 mg/dL.",
+    "retrieved_note_numbers": [2],
+    "patient_id": "p001",
+    "expected_supported": true
+  },
+  {
+    "name": "metformin_supported",
+    "generated_text": "Metformin dose is 1000 mg.",
+    "retrieved_note_numbers": [1],
+    "patient_id": "p001",
+    "expected_supported": true
+  },
+  {
+    "name": "lisinopril_unsupported",
+    "generated_text": "Lisinopril dose is 25 mg.",
+    "retrieved_note_numbers": [1],
+    "patient_id": "p001",
+    "expected_supported": false
+  },
+  {
+    "name": "azithromycin_supported",
+    "generated_text": "Azithromycin 500 mg was started.",
+    "retrieved_note_numbers": [3],
+    "patient_id": "p002",
+    "expected_supported": true
+  },
+  {
+    "name": "duration_supported",
+    "generated_text": "Azithromycin continued for 4 days.",
+    "retrieved_note_numbers": [3],
+    "patient_id": "p002",
+    "expected_supported": true
+  },
+  {
+    "name": "elder_age_supported",
+    "generated_text": "The patient is 72 years old.",
+    "retrieved_note_numbers": [5],
+    "patient_id": "p003",
+    "expected_supported": true
+  },
+  {
+    "name": "mmse_supported",
+    "generated_text": "MMSE score was 22/30.",
+    "retrieved_note_numbers": [5],
+    "patient_id": "p003",
+    "expected_supported": true
+  },
+  {
+    "name": "controlled_bp_supported",
+    "generated_text": "Blood pressure was 128/78 mmHg.",
+    "retrieved_note_numbers": [6],
+    "patient_id": "p003",
+    "expected_supported": true
+  },
+  {
+    "name": "bmi_supported",
+    "generated_text": "BMI was 34.2.",
+    "retrieved_note_numbers": [7],
+    "patient_id": "p004",
+    "expected_supported": true
+  },
+  {
+    "name": "creatinine_supported",
+    "generated_text": "Creatinine was 0.9 mg/dL.",
+    "retrieved_note_numbers": [8],
+    "patient_id": "p004",
+    "expected_supported": true
+  },
+  {
+    "name": "c3_supported",
+    "generated_text": "Complement C3 was 65 mg/dL.",
+    "retrieved_note_numbers": [9],
+    "patient_id": "p005",
+    "expected_supported": true
+  },
+  {
+    "name": "prednisone_supported",
+    "generated_text": "Prednisone 40 mg daily was started.",
+    "retrieved_note_numbers": [10],
+    "patient_id": "p005",
+    "expected_supported": true
+  },
+  {
+    "name": "monitoring_supported",
+    "generated_text": "Labs should be checked every 2 weeks initially.",
+    "retrieved_note_numbers": [10],
+    "patient_id": "p005",
+    "expected_supported": true
+  },
+  {
+    "name": "platelets_supported",
+    "generated_text": "Platelets were 142,000.",
+    "retrieved_note_numbers": [13],
+    "patient_id": "p007",
+    "expected_supported": true
+  },
+  {
+    "name": "platelets_unsupported",
+    "generated_text": "Platelets were 120,000.",
+    "retrieved_note_numbers": [13],
+    "patient_id": "p007",
+    "expected_supported": false
+  },
+  {
+    "name": "ast_supported",
+    "generated_text": "AST was 48 U/L.",
+    "retrieved_note_numbers": [14],
+    "patient_id": "p007",
+    "expected_supported": true
+  },
+  {
+    "name": "alt_supported",
+    "generated_text": "ALT improved to 42 U/L.",
+    "retrieved_note_numbers": [16],
+    "patient_id": "p008",
+    "expected_supported": true
+  },
+  {
+    "name": "lipase_unsupported",
+    "generated_text": "Lipase was 500 U/L.",
+    "retrieved_note_numbers": [19],
+    "patient_id": "p010",
+    "expected_supported": false
+  },
+  {
+    "name": "context_mismatch_unsupported",
+    "generated_text": "The plan includes 4 visits.",
+    "retrieved_note_numbers": [18],
+    "patient_id": "p009",
+    "expected_supported": false
+  }
+]

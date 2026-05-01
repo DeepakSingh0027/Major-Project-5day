@@ -14,6 +14,88 @@ CSV files in `datasets/`.
 
 Converts the FHIR files into structured datasets.
 
+## Recent Progress / Current Working State
+
+The project now includes a Streamlit dashboard in `app.py` for interacting
+with the clinical RAG knowledge base.
+
+Current dashboard status:
+
+1. **Patient profile selection is working** — the app loads
+   `datasets/patients.csv`, renders patient demographics, and allows patient
+   switching from the sidebar.
+2. **Clinician dashboard is wired to RAG** — the "Generate Clinician Summary"
+   action can call the existing `RAGController` with patient-scoped retrieval.
+3. **Vector artifact checks are in place** — the dashboard checks for local
+   FAISS/vector artifacts before attempting generation.
+4. **Clinician output state is tracked** — generated summary text, retrieved
+   evidence chunks, verifier flags, editable override text, and warning
+   acknowledgement state are stored in Streamlit session state.
+5. **Patient explanation tab is planned/incomplete** — the tab exists as a
+   placeholder and should be implemented next using the patient-facing RAG
+   mode.
+
+### Ollama Failure Diagnosis
+
+Observed UI error:
+
+```text
+LLM generation error: Cannot connect to Ollama. Is it running? (ollama serve)
+```
+
+Diagnosis from the local environment:
+
+- `ollama` is installed and available on the system path.
+- The Ollama HTTP API was not reachable at `http://localhost:11434`.
+- `python3 llm_client.py` reported `Server reachable: False`.
+- Root cause: the Ollama server process was not running. This was not a
+  database, retrieval, or vector-index failure.
+
+Recovery commands:
+
+```bash
+ollama serve
+ollama pull llama3
+```
+
+Optional background startup for longer-running dashboard sessions:
+
+```bash
+nohup ollama serve > ollama.log 2>&1 &
+```
+
+Use background startup when the dashboard should keep working after the
+terminal used to start Ollama is closed.
+
+### Planned Streamlit Task 9 — Patient Explanation UI
+
+Goal: Implement the patient-facing explanation workflow in the Streamlit
+`Patient Explanation` tab.
+
+Planned implementation notes:
+
+1. Reuse the existing RAG controller patient mode:
+   `rag_controller.query(..., mode="patient", patient_id=patient_id)`.
+2. Store outputs with distinct mode-specific session keys such as
+   `clinician_summary_{patient_id}` and `patient_summary_{patient_id}` so the
+   clinician and patient tabs cannot overwrite each other.
+3. Extract shared generation/rendering logic into a reusable Streamlit helper
+   that accepts the patient ID, mode, tab label, default query, and response
+   key.
+4. Render the patient response with patient-friendly text, verifier warnings,
+   and retrieved evidence chunks.
+5. Treat example helper code in planning notes as a template, not as exact
+   required code.
+
+### Planned Ollama Preflight Improvement
+
+Before any Streamlit generation button runs the RAG pipeline:
+
+1. Check `/api/tags` on the configured Ollama base URL.
+2. Confirm the configured model, currently `llama3`, is available locally.
+3. Disable generation buttons when Ollama is down or the model is missing.
+4. Show setup guidance instead of waiting for the generation request to fail.
+
 ## Task 5 — Parse FHIR Bundle JSON Files [DONE]
 
 Goal: Convert JSON → tables.
@@ -255,7 +337,66 @@ tracking.
 - Default base URL: `http://localhost:11434`
 - Target latency: < 2.8s inference overhead
 
+### Follow-up recommendation
+
+The Streamlit dashboard should perform an Ollama preflight check before
+running generation. The check should ping `/api/tags`, verify that the
+configured model is present, and disable generation buttons when the server
+or model is unavailable. This prevents confusing runtime errors when
+`ollama serve` has not been started.
+
 ---
+
+## Task 11b — Streamlit Clinician Dashboard [PARTIAL]
+
+Goal: Provide a simple browser UI over the patient knowledge base and RAG
+pipeline.
+
+Status: **Partially complete.** `app.py` exists and can load patient
+profiles, render a clinician dashboard, and trigger patient-scoped clinician
+summary generation through the existing RAG controller.
+
+### What is currently implemented
+
+1. **Patient selector** — loads `datasets/patients.csv` and renders patient
+   demographics in the sidebar and main view.
+2. **Clinician RAG action** — "Generate Clinician Summary" calls
+   `RAGController.query()` in clinician mode with the selected `patient_id`.
+3. **Artifact validation** — the app checks for note embeddings, FAISS index,
+   vector metadata, and vector config before generation.
+4. **Result rendering** — generated summary text, timing metrics, verifier
+   warnings, and retrieved evidence chunks are shown in the dashboard.
+5. **Clinician override shell** — the generated summary is copied into an
+   editable text area with a verifier-warning acknowledgement checkbox.
+
+### Current limitation
+
+- The dashboard still depends on an already-running Ollama server. If Ollama
+  is stopped, generation fails with a connection error from `llm_client.py`.
+  Add the preflight check described in Task 11 before treating this UI as
+  polished.
+
+---
+
+## Task 11c — Streamlit Patient Explanation UI [PLANNED]
+
+Goal: Add a patient-facing explanation workflow to the Streamlit dashboard.
+
+Status: **Planned.** The `Patient Explanation` tab exists, but it currently
+shows placeholder text.
+
+### Planned work
+
+1. Reuse `RAGController.query()` with `mode="patient"` and the active
+   `patient_id`.
+2. Store patient-facing results separately from clinician-facing results with
+   mode-specific session keys.
+3. Extract shared generation and result-rendering logic so the clinician and
+   patient tabs do not duplicate the same RAG UI flow.
+4. Render patient-friendly explanations, verifier warnings, and supporting
+   evidence chunks.
+5. Disable generation when Ollama is not ready or the selected model is not
+   pulled.
 
 ## Task 12 — Hybrid Retrieval [DONE]
 
@@ -450,6 +591,7 @@ parallel even though the final deliverable connects all three stages.
 
 ```
 Major-Project-5day/
+├── app.py              # Streamlit dashboard for patient profiles and RAG output
 ├── build_database.py    # Generates SQLite DB from CSV files
 ├── extract_clinical_entities.py  # Clinical NLP pipeline for FHIR note text
 ├── extract_data.py      # Main ETL script - reads FHIR bundles, writes CSVs
@@ -461,6 +603,7 @@ Major-Project-5day/
 ├── rag_controller.py    # RAG orchestrator - retrieval + prompting + LLM
 ├── vector_search.py     # Builds FAISS index and runs semantic note search
 ├── verifier.py          # Numeric / semantic verification and audit logging
+├── .streamlit/          # Streamlit app configuration (local/project UI config)
 ├── datasets/            # Output CSV files, vector artifacts, and SQLite database
 ├── tests/               # Unittest coverage and benchmark fixtures
 ├── readme.md            # Project README (currently empty)
@@ -470,6 +613,9 @@ Major-Project-5day/
 The `synthea/output/fhir/` data source directory is **not committed** to the
 repo. It must exist locally (generated by running the Synthea patient
 simulator) before running the scripts.
+
+Generated CSVs, vector artifacts, SQLite databases, and audit logs may exist
+locally in `datasets/` depending on which tasks have been run.
 
 ### Dependencies
 
@@ -494,8 +640,18 @@ Install and configure Ollama:
 
 ```bash
 # Install Ollama from https://ollama.com/download
+# Start the local API server:
+ollama serve
+
 # Then pull the model:
 ollama pull llama3
+```
+
+For longer-running dashboard sessions, Ollama can be started in the
+background:
+
+```bash
+nohup ollama serve > ollama.log 2>&1 &
 ```
 
 ---
@@ -531,6 +687,9 @@ python hybrid_retriever.py --query "chest pain and diabetes" --top-k 8
 
 # Test Ollama LLM connectivity
 python llm_client.py
+
+# Run the Streamlit dashboard
+streamlit run app.py
 
 # Run the full RAG pipeline (retrieve + prompt + generate)
 python rag_controller.py --query "patient with chest pain and diabetes" --mode both --top-k 8

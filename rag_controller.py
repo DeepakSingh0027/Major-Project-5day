@@ -9,6 +9,7 @@ import argparse
 import os
 import sys
 import time
+from collections.abc import Callable
 
 import pandas as pd
 
@@ -120,6 +121,8 @@ class RAGController:
         top_k: int = DEFAULT_TOP_K,
         temperature: float = 0.3,
         max_tokens: int = 1024,
+        patient_id: str | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> dict:
         """Run a complete RAG query: retrieve → prompt → generate.
 
@@ -129,6 +132,8 @@ class RAGController:
             top_k: Number of chunks to retrieve (target 5-8).
             temperature: LLM sampling temperature.
             max_tokens: Maximum tokens for LLM generation.
+            patient_id: Optional patient ID used to scope retrieval.
+            progress_callback: Optional callback for UI progress messages.
 
         Returns:
             Dict with keys: query, mode, chunks, clinician_response,
@@ -137,15 +142,26 @@ class RAGController:
         overall_start = time.perf_counter()
 
         # 1. Retrieve relevant chunks
+        if progress_callback:
+            progress_callback("Retrieving patient records from hybrid search...")
         retrieval_start = time.perf_counter()
-        chunks = self.retriever.retrieve(query=query_text, top_k=top_k)
+        if patient_id:
+            chunks = self.retriever.retrieve(
+                query=query_text,
+                top_k=top_k,
+                patient_id=patient_id,
+            )
+        else:
+            chunks = self.retriever.retrieve(query=query_text, top_k=top_k)
         retrieval_ms = (time.perf_counter() - retrieval_start) * 1000
 
         print(f"Retrieved {len(chunks)} chunk(s) in {retrieval_ms:.0f}ms")
 
-        # 2. Determine patient context from top-ranked chunk
+        # 2. Determine patient context from selected patient or top-ranked chunk
         patient_context = None
-        if chunks:
+        if patient_id:
+            patient_context = self._load_patient_context(patient_id)
+        elif chunks:
             top_patient_id = chunks[0].get("patient_id", "")
             if top_patient_id:
                 patient_context = self._load_patient_context(top_patient_id)
@@ -154,6 +170,7 @@ class RAGController:
         result = {
             "query": query_text,
             "mode": mode,
+            "patient_id": patient_id,
             "chunks_retrieved": len(chunks),
             "chunks": chunks,
             "clinician_response": None,
@@ -164,6 +181,8 @@ class RAGController:
 
         if mode in ("clinician", "both"):
             print("Generating clinician response...")
+            if progress_callback:
+                progress_callback("Generating clinician summary with local LLM...")
             clinician_prompt = prompt_templates.build_clinician_prompt(
                 query=query_text,
                 retrieved_chunks=chunks,
@@ -183,6 +202,8 @@ class RAGController:
 
         if mode in ("patient", "both"):
             print("Generating patient response...")
+            if progress_callback:
+                progress_callback("Generating patient explanation with local LLM...")
             patient_prompt = prompt_templates.build_patient_prompt(
                 query=query_text,
                 retrieved_chunks=chunks,
@@ -205,7 +226,10 @@ class RAGController:
         result["total_duration_ms"] = round(total_ms)
 
         print("Running verification checks...")
-        for res_mode, res_key in [("clinician", "clinician_response"), ("patient", "patient_response")]:
+        if progress_callback:
+            progress_callback("Running numeric and semantic verification...")
+        response_modes = [("clinician", "clinician_response"), ("patient", "patient_response")]
+        for res_mode, res_key in response_modes:
             res_obj = result.get(res_key)
             if res_obj and not res_obj.get("error"):
                 gen_text = res_obj.get("response", "")
@@ -378,6 +402,12 @@ def parse_args() -> argparse.Namespace:
         default=0.3,
         help="LLM sampling temperature.",
     )
+    parser.add_argument(
+        "--patient-id",
+        type=str,
+        default=None,
+        help="Optional patient ID to scope retrieval.",
+    )
     return parser.parse_args()
 
 
@@ -392,6 +422,7 @@ def main() -> None:
         mode=args.mode,
         top_k=args.top_k,
         temperature=args.temperature,
+        patient_id=args.patient_id,
     )
 
     print_rag_result(result)

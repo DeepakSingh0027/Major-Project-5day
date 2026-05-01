@@ -22,6 +22,68 @@ DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_TIMEOUT = 300
 
 
+def get_ollama_readiness(
+    model_name: str = DEFAULT_MODEL,
+    base_url: str = DEFAULT_BASE_URL,
+    timeout: int = 2,
+) -> dict:
+    """Return Ollama server/model readiness details for lightweight preflights."""
+    status = {
+        "ready": False,
+        "server_available": False,
+        "model_available": False,
+        "models": [],
+        "error": "",
+    }
+
+    if requests is None:
+        status["error"] = "The 'requests' package is not installed."
+        return status
+
+    try:
+        response = requests.get(f"{base_url.rstrip('/')}/api/tags", timeout=timeout)
+        response.raise_for_status()
+        models = [model["name"] for model in response.json().get("models", [])]
+    except requests.ConnectionError:
+        status["error"] = "Cannot connect to Ollama. Is it running? (ollama serve)"
+        return status
+    except requests.Timeout:
+        status["error"] = f"Ollama readiness check timed out after {timeout}s."
+        return status
+    except requests.HTTPError as exc:
+        status["error"] = f"Ollama API error: {exc}"
+        return status
+
+    model_available = any(
+        model_name == model or model.startswith(f"{model_name}:")
+        for model in models
+    )
+    status.update({
+        "ready": model_available,
+        "server_available": True,
+        "model_available": model_available,
+        "models": models,
+    })
+
+    if not model_available:
+        status["error"] = f"Model '{model_name}' is not pulled."
+
+    return status
+
+
+def is_ollama_ready(
+    model_name: str = DEFAULT_MODEL,
+    base_url: str = DEFAULT_BASE_URL,
+    timeout: int = 2,
+) -> bool:
+    """Return True when Ollama is reachable and the requested model is present."""
+    return get_ollama_readiness(
+        model_name=model_name,
+        base_url=base_url,
+        timeout=timeout,
+    )["ready"]
+
+
 class OllamaClient:
     """Client for the Ollama REST API (http://localhost:11434).
 

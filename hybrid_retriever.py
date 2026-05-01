@@ -208,6 +208,7 @@ class HybridRetriever:
         top_k: int = DEFAULT_TOP_K,
         dense_weight: float = DEFAULT_DENSE_WEIGHT,
         lexical_weight: float = DEFAULT_LEXICAL_WEIGHT,
+        patient_id: str | None = None,
     ) -> list[dict]:
         """Run hybrid retrieval and return fused results.
 
@@ -219,13 +220,16 @@ class HybridRetriever:
             top_k: Number of final results to return (target 5-8).
             dense_weight: Weight for dense retrieval scores in fusion.
             lexical_weight: Weight for lexical retrieval scores in fusion.
+            patient_id: Optional patient ID used to filter retrieved chunks.
 
         Returns:
             List of dicts, each containing: note_id, patient_id,
             note_text, dense_score, lexical_score, fused_score, rank.
         """
-        # Fetch more candidates than needed so fusion has room to work
-        candidate_k = min(top_k * 3, len(self.metadata_df))
+        # FAISS cannot filter metadata natively, so patient-scoped retrieval
+        # over-fetches and filters after vector/BM25 scoring.
+        candidate_multiplier = 10 if patient_id else 3
+        candidate_k = min(top_k * candidate_multiplier, len(self.metadata_df))
 
         # 1. Dense retrieval
         dense_results = self.dense_retriever.search(query, candidate_k)
@@ -270,12 +274,20 @@ class HybridRetriever:
                 "fused_score": round(fused, 4),
             }
 
-        # 5. Sort by fused score and take top-k
+        # 5. Sort by fused score and take top-k after optional patient filter
         ranked_indices = sorted(
             fused_scores.keys(),
             key=lambda i: fused_scores[i]["fused_score"],
             reverse=True,
-        )[:top_k]
+        )
+        if patient_id:
+            normalized_patient_id = str(patient_id)
+            ranked_indices = [
+                index
+                for index in ranked_indices
+                if str(self.metadata_df.iloc[index].get("patient_id", "")) == normalized_patient_id
+            ]
+        ranked_indices = ranked_indices[:top_k]
 
         # 6. Build result dicts with metadata
         results = []
@@ -288,6 +300,7 @@ class HybridRetriever:
                 "note_text": str(row.get("note_text", "")),
                 "resource_type": str(row.get("resource_type", "")),
                 "resource_id": str(row.get("resource_id", "")),
+                "date": str(row.get("date", "")),
                 "dense_score": fused_scores[idx]["dense_score"],
                 "lexical_score": fused_scores[idx]["lexical_score"],
                 "fused_score": fused_scores[idx]["fused_score"],

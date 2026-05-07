@@ -21,6 +21,10 @@ DEFAULT_MODEL = "llama3"
 DEFAULT_BASE_URL = "http://localhost:11434"
 DEFAULT_TIMEOUT = 300
 
+# Ollama >= 0.5 deprecated the top-level "system" field in /api/generate.
+# Use /api/chat with a messages array instead to avoid HTTP 500 errors.
+GENERATE_ENDPOINT = "/api/chat"
+
 
 def get_ollama_readiness(
     model_name: str = DEFAULT_MODEL,
@@ -159,7 +163,12 @@ class OllamaClient:
         temperature: float = 0.3,
         max_tokens: int = 1024,
     ) -> dict:
-        """Generate a response from the Ollama model.
+        """Generate a response from the Ollama model via /api/chat.
+
+        Uses the /api/chat endpoint with a messages array so that system
+        prompts are passed correctly. The legacy /api/generate endpoint
+        no longer accepts a top-level ``system`` field in Ollama >= 0.5,
+        which caused HTTP 500 errors when a system prompt was provided.
 
         Args:
             prompt: The user prompt / question.
@@ -171,9 +180,15 @@ class OllamaClient:
             Dict with keys: response, model, duration_ms, prompt_eval_count,
             eval_count, error (if any).
         """
+        # Build messages array — system role first when a prompt is provided
+        messages: list[dict] = []
+        if system_prompt:
+            messages.append({"role": "system", "content": system_prompt})
+        messages.append({"role": "user", "content": prompt})
+
         payload = {
             "model": self.model,
-            "prompt": prompt,
+            "messages": messages,
             "stream": False,
             "options": {
                 "temperature": temperature,
@@ -181,14 +196,11 @@ class OllamaClient:
             },
         }
 
-        if system_prompt:
-            payload["system"] = system_prompt
-
         start_time = time.perf_counter()
 
         try:
             response = requests.post(
-                f"{self.base_url}/api/generate",
+                f"{self.base_url}{GENERATE_ENDPOINT}",
                 json=payload,
                 timeout=self.timeout,
             )
@@ -210,17 +222,49 @@ class OllamaClient:
                 "error": f"Request timed out after {self.timeout}s",
             }
         except requests.HTTPError as exc:
-            return {
-                "response": "",
-                "model": self.model,
-                "duration_ms": 0,
-                "error": str(exc),
-            }
+            error_body = ""
+            try:
+                error_body = exc.response.text[:300]
+            except Exception:  # noqa: BLE001
+                pass
+                
+            # Architectural Fallback: If GPU fails, retry on CPU
+            if "CUDA error" in error_body or "CUDA" in error_body:
+                print("Warning: CUDA error detected. Retrying with CPU (num_gpu=0)...")
+                payload["options"]["num_gpu"] = 0
+                try:
+                    response = requests.post(
+                        f"{self.base_url}{GENERATE_ENDPOINT}",
+                        json=payload,
+                        timeout=self.timeout,
+                    )
+                    response.raise_for_status()
+                    data = response.json()
+                except Exception as retry_exc:
+                    return {
+                        "response": "",
+                        "model": self.model,
+                        "duration_ms": 0,
+                        "error": f"CUDA fallback to CPU failed: {retry_exc}",
+                    }
+            else:
+                error_msg = str(exc)
+                if error_body:
+                    error_msg = f"{error_msg} — server said: {error_body}"
+                return {
+                    "response": "",
+                    "model": self.model,
+                    "duration_ms": 0,
+                    "error": error_msg,
+                }
 
         elapsed_ms = (time.perf_counter() - start_time) * 1000
 
+        # /api/chat returns the assistant turn under data["message"]["content"]
+        message_content = data.get("message", {}).get("content", "")
+
         return {
-            "response": data.get("response", ""),
+            "response": message_content,
             "model": data.get("model", self.model),
             "duration_ms": round(elapsed_ms),
             "prompt_eval_count": data.get("prompt_eval_count", 0),

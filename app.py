@@ -6,6 +6,7 @@ patient-facing explanations over the local clinical knowledge base.
 
 import os
 import sys
+from datetime import datetime
 from importlib import metadata
 
 try:
@@ -44,6 +45,9 @@ SESSION_DEFAULTS = {
     "clinician_summary": None,
     "patient_explanation": None,
     "patient_selector": None,
+    "batch_id": "",          # set once per session for audit log grouping
+    "active_model": "",     # Task 11: active Ollama model (defaults to OLLAMA_MODEL)
+    "tuned_top_k": None,    # Task 11: chunk reduction override (None = use UI default)
 }
 
 PATIENT_PROFILE_COLUMNS = [
@@ -100,6 +104,14 @@ def initialize_session_state() -> None:
         if key not in st.session_state:
             st.session_state[key] = default_value
 
+    # batch_id is set once per browser session and never overwritten on rerun
+    if not st.session_state["batch_id"]:
+        st.session_state["batch_id"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+    # active_model is set once per session; never reset on rerun
+    if not st.session_state["active_model"]:
+        st.session_state["active_model"] = OLLAMA_MODEL
+
 
 # -----------------
 # Cached Resources
@@ -118,11 +130,10 @@ def load_workflow_image(path: str) -> bytes:
 
 
 @st.cache_resource(show_spinner=False)
-def load_rag_controller():
-    """Load the RAG controller only when generation is requested."""
+def load_rag_controller(model: str = OLLAMA_MODEL):
+    """Load the RAG controller, keyed by model name for runtime switching."""
     import rag_controller
-
-    return rag_controller.RAGController(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL)
+    return rag_controller.RAGController(model=model, base_url=OLLAMA_BASE_URL)
 
 
 @st.cache_data(show_spinner=False, ttl=5)
@@ -340,14 +351,15 @@ def run_generation_query(
         render_setup_commands()
         return None
 
-    readiness = check_ollama_readiness(OLLAMA_MODEL, OLLAMA_BASE_URL)
+    active_model = st.session_state.get("active_model", OLLAMA_MODEL)
+    readiness = check_ollama_readiness(active_model, OLLAMA_BASE_URL)
     if not readiness.get("ready"):
         st.error(readiness.get("error") or "Ollama is not ready for generation.")
         render_ollama_setup_commands()
         return None
 
     try:
-        controller = load_rag_controller()
+        controller = load_rag_controller(model=active_model)
     except SystemExit:
         st.error("RAG dependencies or vector artifacts are unavailable.")
         render_setup_commands()
@@ -369,6 +381,7 @@ def run_generation_query(
                 max_tokens=max_tokens,
                 patient_id=patient_id,
                 progress_callback=write_progress,
+                batch_id=st.session_state.get("batch_id", ""),
             )
         except Exception as exc:
             status.update(label=f"{label} generation failed", state="error", expanded=True)
@@ -458,15 +471,45 @@ def render_evidence_chunks(chunks: list[dict]) -> None:
             st.write(chunk.get("note_text", ""))
 
 
+def log_clinician_decision(
+    patient_id: str,
+    query: str,
+    original_text: str,
+    edited_text: str,
+) -> None:
+    """Append a clinician decision row to the audit log (Task 12).
+
+    clinician_accepted=True when the text was left unchanged (accepted),
+    False when the clinician edited before finalising (override).
+    """
+    import verifier as _verifier  # noqa: PLC0415 — lazy to avoid circular startup cost
+    clinician_accepted = original_text.strip() == edited_text.strip()
+    _verifier.log_provenance(
+        query=query,
+        mode="clinician_decision",
+        chunks=[],
+        generated_text=edited_text,
+        unsupported_numbers=[],
+        unsupported_claims=[],
+        retrieval_ms=0,
+        generation_ms=0,
+        clinician_accepted=clinician_accepted,
+        batch_id=st.session_state.get("batch_id", ""),
+    )
+
+
 def render_clinician_override(patient_id: str, summary_text: str, flags: dict) -> None:
-    """Render editable clinician-reviewed summary controls."""
+    """Render editable clinician-reviewed summary controls (Task 12)."""
     edited_key = generation_state_key("clinician", patient_id, "edited_summary")
     ack_key = generation_state_key("clinician", patient_id, "override_ack")
+    decision_key = generation_state_key("clinician", patient_id, "decision_logged")
 
     if edited_key not in st.session_state:
         st.session_state[edited_key] = summary_text
     if ack_key not in st.session_state:
         st.session_state[ack_key] = False
+    if decision_key not in st.session_state:
+        st.session_state[decision_key] = False
 
     st.text_area(
         "Clinician-reviewed summary",
@@ -481,6 +524,27 @@ def render_clinician_override(patient_id: str, summary_text: str, flags: dict) -
         disabled=not has_warnings,
     )
 
+    # Task 12 — log the clinician's final decision
+    result_key = generation_state_key("clinician", patient_id, "result")
+    original_query = (
+        st.session_state.get(result_key, {}).get("query", "") if st.session_state.get(result_key) else ""
+    )
+    edited_text = st.session_state.get(edited_key, "")
+    accepted = summary_text.strip() == edited_text.strip()
+    btn_label = "✅ Accept Summary" if accepted else "📝 Log Override"
+
+    if st.session_state.get(decision_key):
+        st.success("Decision logged to audit trail.")
+    elif st.button(btn_label, key=generation_state_key("clinician", patient_id, "log_btn")):
+        log_clinician_decision(
+            patient_id=patient_id,
+            query=original_query,
+            original_text=summary_text,
+            edited_text=edited_text,
+        )
+        st.session_state[decision_key] = True
+        st.rerun()
+
 
 def generation_is_available() -> bool:
     """Render dependency warnings and return whether generation can run."""
@@ -491,7 +555,8 @@ def generation_is_available() -> bool:
         render_setup_commands()
         available = False
 
-    readiness = check_ollama_readiness(OLLAMA_MODEL, OLLAMA_BASE_URL)
+    active_model = st.session_state.get("active_model", OLLAMA_MODEL)
+    readiness = check_ollama_readiness(active_model, OLLAMA_BASE_URL)
     if not readiness.get("ready"):
         st.error(
             "Ollama is not running or the configured model is missing. "
@@ -531,11 +596,13 @@ def render_generation_ui(
     query = st.text_input(f"{tab_label} query", key=query_key)
 
     control_columns = st.columns(3)
+    # Task 11: respect any active chunk-reduction tune from the Latency Tuning panel
+    _default_top_k = int(st.session_state.get("tuned_top_k") or 3)
     top_k = control_columns[0].number_input(
         "Evidence chunks",
         1,
         12,
-        8,
+        _default_top_k,
         key=top_k_key,
     )
     temperature = control_columns[1].slider(
@@ -627,9 +694,331 @@ def render_patient_explanation(patient: pd.Series) -> None:
     )
 
 
-def render_dual_output_tabs(patient: pd.Series) -> None:
-    """Render the Day 3 dual-output shell without triggering RAG generation."""
-    clinician_tab, patient_tab = st.tabs(["Clinician Dashboard", "Patient Explanation"])
+# -----------------
+# Latency Tuning Panel (Day 4 Task 11)
+# -----------------
+
+def render_latency_tuning_panel(audit_df: "pd.DataFrame") -> None:
+    """Render Task 11 latency tuning controls.
+
+    Shows current average latency vs the 2800ms target. When over target,
+    surfaces two actionable options: reduce retrieved chunks or switch the
+    active Ollama model to a lighter quantized variant.
+    """
+    st.markdown("### ⚡ Latency Tuning (Task 11 — Target: 2.8 s)")
+
+    # Only measure generation rows (not clinician_decision rows)
+    gen_df = audit_df[audit_df["mode"].isin(["clinician", "patient"])]
+    active_model = st.session_state.get("active_model", OLLAMA_MODEL)
+    tuned_top_k = st.session_state.get("tuned_top_k") or 3
+
+    # ---- Status banner ----
+    status_col, info_col = st.columns([3, 2])
+    with info_col:
+        st.info(
+            f"**Active model:** `{active_model}`  \n"
+            f"**Current top_k:** `{tuned_top_k}`"
+        )
+
+    if gen_df.empty or "generation_ms" not in gen_df.columns:
+        with status_col:
+            st.info("⌛ No generation data yet — run a clinician or patient query first.")
+        return
+
+    gen_ms = pd.to_numeric(gen_df["generation_ms"], errors="coerce").dropna()
+    avg_ms = float(gen_ms.mean()) if len(gen_ms) else 0.0
+    pct_passing = float((gen_ms < 2800).mean() * 100) if len(gen_ms) else 0.0
+
+    with status_col:
+        if avg_ms <= 2800:
+            st.success(
+                f"✅ **Target met** — Avg {avg_ms:.0f} ms < 2800 ms "
+                f"({pct_passing:.0f}% of {len(gen_ms)} queries within target)"
+            )
+        else:
+            st.error(
+                f"❌ **Over target** — Avg {avg_ms:.0f} ms "
+                f"(+{avg_ms - 2800:.0f} ms | {pct_passing:.0f}% within target)"
+            )
+
+    if avg_ms <= 2800:
+        st.caption("No tuning required. Re-check after more queries are logged.")
+        return
+
+    st.markdown("**Tuning Options** — apply one or both to bring average under 2.8 s:")
+    opt1_col, opt2_col = st.columns(2)
+
+    # ---- Option 1: Reduce retrieved chunks ----
+    with opt1_col:
+        with st.container(border=True):
+            st.markdown("**📏 Option 1 — Reduce Retrieved Chunks**")
+            st.write(
+                f"Fewer context chunks means less tokens for the model to process. "
+                f"Current top_k: **{tuned_top_k}** \u2192 Suggested: **5**"
+            )
+            new_top_k = st.select_slider(
+                "Set top_k",
+                options=[3, 5, 6, 8, 10],
+                value=min(tuned_top_k, 5),
+                key="tune_top_k_slider",
+            )
+            st.caption(f"Estimated impact: ~{(tuned_top_k - new_top_k) * 150:.0f} ms saved per query.")
+            def apply_chunk_reduction():
+                new_val = int(st.session_state["tune_top_k_slider"])
+                st.session_state["tuned_top_k"] = new_val
+                for _k in list(st.session_state.keys()):
+                    if "_top_k_" in _k:
+                        st.session_state[_k] = new_val
+                st.cache_data.clear()
+
+            if st.button("\u26a1 Apply Chunk Reduction", key="apply_chunk_tune", type="primary", on_click=apply_chunk_reduction):
+                st.success(f"top_k set to {st.session_state['tuned_top_k']}. Run a new query and refresh to measure improvement.")
+
+    # ---- Option 2: Switch model ----
+    with opt2_col:
+        with st.container(border=True):
+            st.markdown("**🤖 Option 2 — Switch to Lighter Model**")
+            st.write(
+                "A smaller or more quantized model has lower inference latency. "
+                "Quantized variants (q4_0) are typically 40-60% faster than default."
+            )
+            readiness = check_ollama_readiness(active_model, OLLAMA_BASE_URL)
+            available_models = readiness.get("models", [])
+            if not available_models:
+                available_models = [active_model]
+
+            current_idx = (
+                available_models.index(active_model)
+                if active_model in available_models else 0
+            )
+            selected_model = st.selectbox(
+                "Select model",
+                available_models,
+                index=current_idx,
+                key="tune_model_select",
+            )
+            st.caption(
+                "After switching, click \"Generate\" to measure the new latency. "
+                "Pull lighter models with: `ollama pull llama3:8b-instruct-q4_0`"
+            )
+            if st.button("🔄 Apply Model Switch", key="apply_model_tune"):
+                st.session_state["active_model"] = selected_model
+                st.cache_resource.clear()  # force controller reload with new model
+                st.cache_data.clear()
+                st.success(f"Model switched to `{selected_model}`. Run a new query to benchmark.")
+                st.rerun()
+
+
+# -----------------
+# Audit Log Tab (Day 4 Task 10/11)
+# -----------------
+
+@st.cache_data(show_spinner=False, ttl=30)
+def load_audit_log_cached() -> pd.DataFrame:
+    """Load the audit log with a short TTL cache to avoid per-render reads."""
+    import verifier as _v  # noqa: PLC0415
+    return _v.load_audit_log()
+
+
+def render_health_scorecard(df: pd.DataFrame) -> None:
+    """Render Performance Score, Grounding Score, and Override Rate cards."""
+    if df.empty:
+        st.info("No audit data yet. Run a generation query to populate the log.")
+        return
+
+    gen_ms = pd.to_numeric(df.get("generation_ms", pd.Series(dtype=float)), errors="coerce").dropna()
+    performance_score = float((gen_ms < 2800).mean() * 100) if len(gen_ms) else 0.0
+
+    numeric_flag = df.get("numeric_flag", pd.Series([False] * len(df))).fillna(False).astype(bool)
+    semantic_flag = df.get("semantic_flag", pd.Series([False] * len(df))).fillna(False).astype(bool)
+    grounding_score = float((~(numeric_flag | semantic_flag)).mean() * 100)
+
+    clinician_df = df[df["mode"] == "clinician_decision"]
+    if not clinician_df.empty and "clinician_accepted" in clinician_df.columns:
+        reviewed = clinician_df["clinician_accepted"].astype(str).isin(["True", "False", "true", "false"])
+        accepted = clinician_df["clinician_accepted"].astype(str).str.lower() == "true"
+        override_label = f"{accepted.sum() / max(reviewed.sum(), 1) * 100:.0f}%"
+    else:
+        override_label = "N/A"
+
+    perf_delta = "✅ On target" if performance_score >= 80 else "⚠️ Needs tuning"
+    grnd_delta = "✅ Clean" if grounding_score >= 90 else "⚠️ Flags present"
+
+    cols = st.columns(4)
+    cols[0].metric("Total Queries", len(df))
+    cols[1].metric("⚡ Performance Score", f"{performance_score:.0f}%", perf_delta)
+    cols[2].metric("🎯 Grounding Score", f"{grounding_score:.0f}%", grnd_delta)
+    cols[3].metric("🩺 Override Rate", override_label)
+
+
+def render_latency_chart(df: pd.DataFrame) -> None:
+    """Render generation latency trend; highlight when average exceeds 2800ms."""
+    if df.empty or "generation_ms" not in df.columns:
+        st.info("No latency data available.")
+        return
+
+    gen_ms = pd.to_numeric(df["generation_ms"], errors="coerce").fillna(0)
+    avg_ms = float(gen_ms.mean())
+
+    if avg_ms < 2800:
+        st.success(f"✅ Avg latency **{avg_ms:.0f} ms** — under 2.8 s target")
+    else:
+        st.error(f"❌ Avg latency **{avg_ms:.0f} ms** — {avg_ms - 2800:.0f} ms over target")
+
+    chart_df = pd.DataFrame({
+        "Generation (ms)": gen_ms.values,
+        "Target 2800 ms": [2800] * len(gen_ms),
+    })
+    st.line_chart(chart_df, height=220)
+    st.caption(f"Peak: {gen_ms.max():.0f} ms | Target: 2800 ms | n={len(gen_ms)}")
+
+
+def render_flag_rate_chart(df: pd.DataFrame) -> None:
+    """Render numeric and semantic verifier flag counts as a stacked bar chart."""
+    if df.empty:
+        st.info("No verifier data available.")
+        return
+
+    numeric_flag = df.get("numeric_flag", pd.Series([False] * len(df))).fillna(False).astype(bool).astype(int)
+    semantic_flag = df.get("semantic_flag", pd.Series([False] * len(df))).fillna(False).astype(bool).astype(int)
+
+    chart_df = pd.DataFrame({
+        "Numeric Flags": numeric_flag.values,
+        "Semantic Flags": semantic_flag.values,
+    })
+    st.bar_chart(chart_df, height=220)
+    st.caption(
+        f"Numeric: {int(numeric_flag.sum())}/{len(df)} | "
+        f"Semantic: {int(semantic_flag.sum())}/{len(df)} queries flagged"
+    )
+
+
+def render_audit_filters(df: pd.DataFrame) -> pd.DataFrame:
+    """Render filter controls and return the filtered DataFrame."""
+    filter_cols = st.columns(4)
+
+    modes = ["All"] + sorted(df["mode"].dropna().unique().tolist())
+    selected_mode = filter_cols[0].selectbox("Mode", modes, key="audit_filter_mode")
+
+    sessions = ["All"]
+    if "batch_id" in df.columns:
+        sessions += sorted(df["batch_id"].dropna().unique().tolist(), reverse=True)
+    selected_session = filter_cols[1].selectbox("Session", sessions, key="audit_filter_session")
+
+    over_threshold = filter_cols[2].checkbox("⚠️ Over 2.8 s only", key="audit_filter_threshold")
+
+    has_flags_only = filter_cols[3].checkbox("🚩 Flagged only", key="audit_filter_flags")
+
+    filtered = df.copy()
+    if selected_mode != "All":
+        filtered = filtered[filtered["mode"] == selected_mode]
+    if selected_session != "All":
+        filtered = filtered[filtered["batch_id"] == selected_session]
+    if over_threshold:
+        filtered = filtered[pd.to_numeric(filtered.get("generation_ms", 0), errors="coerce").fillna(0) >= 2800]
+    if has_flags_only:
+        nf = filtered.get("numeric_flag", pd.Series([False] * len(filtered))).fillna(False).astype(bool)
+        sf = filtered.get("semantic_flag", pd.Series([False] * len(filtered))).fillna(False).astype(bool)
+        filtered = filtered[nf | sf]
+    return filtered.reset_index(drop=True)
+
+
+def render_audit_table(df: pd.DataFrame) -> None:
+    """Render audit log as a summary table with expandable row details."""
+    if df.empty:
+        st.info("No audit rows match the current filters.")
+        return
+
+    display_cols = [c for c in [
+        "timestamp", "batch_id", "mode", "generation_ms",
+        "retrieval_ms", "numeric_flag", "semantic_flag", "clinician_accepted",
+    ] if c in df.columns]
+
+    display_df = df[display_cols].copy()
+    if "generation_ms" in display_df.columns:
+        display_df["generation_ms"] = display_df["generation_ms"].apply(
+            lambda x: f"🔴 {x} ms" if pd.notna(x) and int(x) >= 2800 else f"🟢 {x} ms"
+        )
+    st.dataframe(display_df, use_container_width=True)
+
+    st.markdown("#### Row Details")
+    for i, (_, row) in enumerate(df.iterrows()):
+        ts = str(row.get("timestamp", ""))[:19]
+        mode_label = row.get("mode", "")
+        gen_ms = row.get("generation_ms", 0)
+        latency_icon = "🔴" if pd.notna(gen_ms) and int(gen_ms) >= 2800 else "🟢"
+        with st.expander(f"[{i + 1}] {ts} | {mode_label} | {latency_icon} {gen_ms} ms"):
+            st.markdown(f"**Query:** {row.get('query', '')}")
+            st.markdown(f"**Batch:** `{row.get('batch_id', '')}`")
+            accepted_val = row.get("clinician_accepted", "")
+            if str(accepted_val).lower() == "true":
+                st.success("Clinician accepted this summary.")
+            elif str(accepted_val).lower() == "false":
+                st.warning("Clinician overrode this summary.")
+            st.markdown("**Generated Text:**")
+            st.write(row.get("generated_text", ""))
+            nf_json = row.get("numeric_findings_json", "")
+            sf_json = row.get("semantic_findings_json", "")
+            if nf_json and nf_json not in ("", "[]"):
+                with st.expander("Numeric Findings JSON"):
+                    st.code(nf_json, language="json")
+            if sf_json and sf_json not in ("", "[]"):
+                with st.expander("Semantic Findings JSON"):
+                    st.code(sf_json, language="json")
+
+
+def render_audit_tab() -> None:
+    """Render the Audit Log & Analytics tab (Day 4 Task 10 / 11)."""
+    col_refresh, col_info = st.columns([1, 5])
+    with col_refresh:
+        if st.button("🔄 Refresh Logs", key="audit_refresh"):
+            st.cache_data.clear()
+            st.rerun()
+
+    audit_df = load_audit_log_cached()
+
+    with col_info:
+        st.caption(
+            f"{len(audit_df)} total entries in `datasets/audit_log.csv` "
+            f"| Current session: `{st.session_state.get('batch_id', 'unknown')}`"
+        )
+
+    if audit_df.empty:
+        st.info("No audit data yet — run a generation query to populate the log.")
+        return
+
+    st.markdown("### 📊 Health Scorecard")
+    render_health_scorecard(audit_df)
+    st.divider()
+
+    render_latency_tuning_panel(audit_df)
+    st.divider()
+
+    st.markdown("### Filters")
+    filtered_df = render_audit_filters(audit_df)
+    st.caption(f"Showing **{len(filtered_df)}** of {len(audit_df)} rows")
+    st.divider()
+
+    chart_cols = st.columns(2)
+    with chart_cols[0]:
+        st.markdown("#### ⚡ Generation Latency (ms)")
+        render_latency_chart(filtered_df)
+    with chart_cols[1]:
+        st.markdown("#### 🚩 Verifier Flag Rate")
+        render_flag_rate_chart(filtered_df)
+    st.divider()
+
+    st.markdown("### Audit Log")
+    render_audit_table(filtered_df)
+
+
+def render_main_tabs(patient: pd.Series) -> None:
+    """Render three-tab dashboard: Clinician, Patient, and Audit & Analytics."""
+    clinician_tab, patient_tab, audit_tab = st.tabs([
+        "🩺 Clinician Dashboard",
+        "👤 Patient Explanation",
+        "📊 Audit & Analytics",
+    ])
 
     with clinician_tab:
         render_clinician_dashboard(patient)
@@ -637,9 +1026,12 @@ def render_dual_output_tabs(patient: pd.Series) -> None:
     with patient_tab:
         render_patient_explanation(patient)
 
+    with audit_tab:
+        render_audit_tab()
+
 
 def render_app(patients_df: pd.DataFrame) -> None:
-    """Render the complete Day 3 Task 7 app shell."""
+    """Render the Day 4 app: clinician + patient + audit & analytics tabs."""
     patients_df = normalize_patients_df(patients_df)
     if patients_df.empty:
         st.error("datasets/patients.csv does not contain any patient rows.")
@@ -649,10 +1041,10 @@ def render_app(patients_df: pd.DataFrame) -> None:
     active_patient = get_active_patient(patients_df)
 
     st.title("Clinical RAG Dashboard")
-    st.caption("Day 3 Task 7: patient selection and application initialization")
+    st.caption("Day 4 — System Testing: latency tuning · clinician override · audit analytics")
     render_patient_profile(active_patient)
     st.divider()
-    render_dual_output_tabs(active_patient)
+    render_main_tabs(active_patient)
 
 
 def main() -> None:
@@ -661,6 +1053,77 @@ def main() -> None:
         page_title="Clinical RAG Dashboard",
         layout="wide",
     )
+    
+    # Premium UI Overhaul Styling
+    st.markdown(
+        """
+        <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        
+        html, body, [class*="css"] {
+            font-family: 'Inter', sans-serif !important;
+        }
+
+        /* Button Styling */
+        .stButton>button {
+            background: linear-gradient(135deg, #00D4FF 0%, #007BFF 100%);
+            color: white !important;
+            border: none;
+            border-radius: 8px;
+            padding: 0.5rem 1rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 6px rgba(0, 123, 255, 0.2);
+        }
+        .stButton>button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 123, 255, 0.3);
+            border: none;
+        }
+
+        /* Card / Container Styling */
+        div[data-testid="stExpander"] {
+            background-color: #151B2B;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        }
+        div[data-testid="stExpander"]:hover {
+            border: 1px solid rgba(0, 212, 255, 0.3);
+        }
+
+        /* Metric Styling */
+        div[data-testid="stMetricValue"] {
+            font-weight: 700;
+            color: #00D4FF !important;
+        }
+
+        /* Input Elements */
+        .stTextInput>div>div>input, .stNumberInput>div>div>input {
+            border-radius: 8px;
+            border: 1px solid rgba(255,255,255,0.1);
+            background-color: #0A0E17;
+            transition: border-color 0.3s ease;
+        }
+        .stTextInput>div>div>input:focus, .stNumberInput>div>div>input:focus {
+            border-color: #00D4FF;
+            box-shadow: 0 0 0 1px #00D4FF;
+        }
+
+        /* Headers */
+        h1, h2, h3 {
+            background: linear-gradient(90deg, #FFFFFF 0%, #B0C4DE 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 700;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+    
     validate_environment()
     initialize_session_state()
 

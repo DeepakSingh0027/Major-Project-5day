@@ -14,7 +14,10 @@ from datetime import datetime
 
 try:
     from sentence_transformers import CrossEncoder, SentenceTransformer, util
-except ImportError:
+except Exception:  # noqa: BLE001 — catches ImportError and transitive failures
+    # sentence-transformers may fail to import if an optional deep-learning
+    # dependency (e.g. torchvision, required by some transformers sub-modules)
+    # is not installed.  Degrade to lexical-only verification in that case.
     CrossEncoder = None
     SentenceTransformer = None
     util = None
@@ -1441,6 +1444,9 @@ def log_provenance(
     generation_ms: int,
     numeric_findings: list[dict] | None = None,
     semantic_findings: list[dict] | None = None,
+    # Task 10/12 additions — optional so existing callers need no changes
+    clinician_accepted: bool | None = None,
+    batch_id: str = "",
 ) -> None:
     """Log the execution details to the audit CSV for traceability."""
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -1451,6 +1457,7 @@ def log_provenance(
 
     row = {
         "timestamp": datetime.now().isoformat(),
+        "batch_id": batch_id,
         "query": query,
         "mode": mode,
         "retrieved_chunk_ids": "|".join(chunk_ids),
@@ -1465,12 +1472,85 @@ def log_provenance(
         "semantic_flag": len(unsupported_claims) > 0,
         "retrieval_ms": retrieval_ms,
         "generation_ms": generation_ms,
+        "clinician_accepted": "" if clinician_accepted is None else clinician_accepted,
     }
 
-    fieldnames = list(row.keys())
+    # Determine fieldnames, extending old CSV headers when new columns are added
+    if file_exists:
+        with open(log_path, "r", newline="", encoding="utf-8") as _f:
+            reader = csv.reader(_f)
+            existing_fieldnames = next(reader, [])
+            old_rows = list(reader)
+
+        fieldnames = existing_fieldnames + [
+            k for k in row if k not in existing_fieldnames
+        ]
+
+        schema_changed = len(fieldnames) > len(existing_fieldnames)
+        if schema_changed:
+            # Rewrite file with new header and padded old rows
+            with open(log_path, "w", newline="", encoding="utf-8") as csvfile:
+                writer = csv.writer(csvfile)
+                writer.writerow(fieldnames)
+                for r in old_rows:
+                    r.extend([""] * (len(fieldnames) - len(r)))
+                    writer.writerow(r)
+    else:
+        fieldnames = list(row.keys())
 
     with open(log_path, "a", newline="", encoding="utf-8") as csvfile:
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction="ignore")
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
+
+
+def load_audit_log(data_dir: str = DATA_DIR) -> "object":  # returns pd.DataFrame
+    """Load and type-cast the audit log CSV.
+
+    Returns an empty DataFrame with correct columns when the log does not
+    exist yet, so callers never need to handle a missing-file case.
+    """
+    try:
+        import pandas as pd  # noqa: PLC0415
+    except ImportError as exc:
+        raise RuntimeError("pandas is required to load the audit log.") from exc
+
+    _COLS = [
+        "timestamp", "batch_id", "query", "mode", "retrieved_chunk_ids",
+        "generated_text", "generated_text_length", "unsupported_numbers",
+        "unsupported_claims_count", "unsupported_claims",
+        "numeric_findings_json", "semantic_findings_json",
+        "numeric_flag", "semantic_flag", "retrieval_ms", "generation_ms",
+        "clinician_accepted",
+    ]
+    log_path = os.path.join(data_dir, AUDIT_LOG_FILE)
+    if not os.path.isfile(log_path):
+        return pd.DataFrame(columns=_COLS)
+
+    try:
+        df = pd.read_csv(log_path)
+    except Exception as exc:
+        print(f"Warning: Failed to load audit log: {exc}")
+        return pd.DataFrame(columns=_COLS)
+
+    # Back-fill columns added after the file was first created
+    for col in ("batch_id", "clinician_accepted", "numeric_findings_json", "semantic_findings_json"):
+        if col not in df.columns:
+            df[col] = ""
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+
+    for col in ("numeric_flag", "semantic_flag"):
+        if col in df.columns:
+            df[col] = (
+                df[col].astype(str).str.lower()
+                .map({"true": True, "false": False, "1": True, "0": False})
+                .fillna(False)
+            )
+
+    for col in ("retrieval_ms", "generation_ms", "unsupported_claims_count", "generated_text_length"):
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+
+    return df.sort_values("timestamp", ascending=True).reset_index(drop=True)

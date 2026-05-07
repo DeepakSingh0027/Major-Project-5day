@@ -2,6 +2,18 @@
 address = "0.0.0.0"
 port = 8501
 headless = true
+# Use poll-based file watcher to avoid Streamlit importing all transitive
+# ML dependencies (sentence-transformers -> transformers -> zoedepth)
+# which crashes when torchvision is not installed.
+fileWatcherType = "poll"
 
 [browser]
 gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#00D4FF"
+backgroundColor = "#0A0E17"
+secondaryBackgroundColor = "#151B2B"
+textColor = "#E2E8F0"
+font = "sans serif"

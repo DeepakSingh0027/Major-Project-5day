@@ -109,7 +109,12 @@ def _format_chunks(retrieved_chunks: list[dict]) -> str:
             f"Relevance {fused_score:.3f}]\n{note_text}"
         )
 
-    return "\n\n---\n\n".join(parts)
+    # Architecturally bound the payload size to prevent CUDA OOM runner crashes.
+    # 12,000 chars is roughly 3,000 tokens, safely fitting inside a 4096 context window.
+    full_context = "\n\n---\n\n".join(parts)
+    if len(full_context) > 12000:
+        return full_context[:12000] + "\n\n[...EVIDENCE TRUNCATED DUE TO CONTEXT LIMITS...]"
+    return full_context
 
 
 def _format_patient_context(patient_context: dict) -> str:

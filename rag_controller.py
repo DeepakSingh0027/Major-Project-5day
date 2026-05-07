@@ -123,6 +123,7 @@ class RAGController:
         max_tokens: int = 1024,
         patient_id: str | None = None,
         progress_callback: Callable[[str], None] | None = None,
+        batch_id: str = "",
     ) -> dict:
         """Run a complete RAG query: retrieve → prompt → generate.
 
@@ -268,6 +269,7 @@ class RAGController:
                     generation_ms=res_obj.get("duration_ms", 0),
                     numeric_findings=numeric_findings,
                     semantic_findings=semantic_findings,
+                    batch_id=batch_id,
                 )
 
         print(f"\nTotal pipeline time: {total_ms:.0f}ms")
